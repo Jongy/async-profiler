@@ -68,7 +68,7 @@ check_if_terminated() {
 
 jattach() {
     set +e
-    "$JATTACH" "$PID" load "$PROFILER" true "$1" > /dev/null
+    "$JATTACH" "$PID" load "$PROFILER" true "$1"
     RET=$?
     set -e
 

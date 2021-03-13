@@ -326,6 +326,7 @@ static int write_command(int fd, int argc, char** argv) {
     int i;
     for (i = 0; i < 4; i++) {
         const char* arg = i < argc ? argv[i] : "";
+        printf("write arg: %s\n", arg);
         if (write(fd, arg, strlen(arg) + 1) <= 0) {
             return 0;
         }

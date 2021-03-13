@@ -27,6 +27,10 @@
 #include <errno.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/un.h>
+#include <asm/unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <linux/perf_event.h>
@@ -37,6 +41,7 @@
 #include "spinLock.h"
 #include "stackFrame.h"
 #include "symbols.h"
+#include <cassert>
 
 
 // Ancient fcntl.h does not define F_SETOWN_EX constants and structures
@@ -329,6 +334,91 @@ Ring PerfEvents::_ring;
 CStack PerfEvents::_cstack;
 bool PerfEvents::_print_extended_warning;
 
+static int _perf_fds_socket = -1;
+
+static int getFdForTid(int tid) {
+    printf("getFdForTid(%d)\n", tid);
+    if (_perf_fds_socket == -1) {
+        char path[108];
+        snprintf(path + 1, sizeof(path) - 1, "async-profiler-%d", getpid());
+        path[0] = '\0';
+        struct sockaddr_un sun;
+        sun.sun_family = AF_UNIX;
+        memcpy(sun.sun_path, path, sizeof(sun.sun_path));
+
+        const int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (sock == -1) {
+            perror("socket()");
+            return -1;
+        }
+
+        const socklen_t addrlen = sizeof(sun) - (sizeof(sun.sun_path) - (strlen(path + 1) + 1));
+        printf("bind addrrlen %d\n", addrlen);
+        if (-1 == bind(sock, (const struct sockaddr*)&sun, addrlen)) {
+            perror("bind()");
+            return -1;
+        }
+
+        if (-1 == listen(sock, 1)) {
+            perror("listen()");
+            return -1;
+        }
+
+        printf("pid %d waiting for connection!\n", getpid());
+        socklen_t addrlen2;
+        _perf_fds_socket = accept(sock, (struct sockaddr*)&sun, &addrlen2);
+        if (_perf_fds_socket == -1) {
+            return -1;
+        }
+
+        close(sock);
+    }
+
+    // request for 'tid'
+    if (send(_perf_fds_socket, &tid, sizeof(tid), 0) != sizeof(tid)) {
+        return -1;
+    }
+
+    struct msghdr msg = {0};
+    struct iovec iov[1];
+    ssize_t n;
+    int newfd;
+
+    union {
+        struct cmsghdr align;
+        char buf[CMSG_SPACE(sizeof(newfd))];
+    } u;
+    struct cmsghdr *cmptr;
+
+    int recv_tid;
+    msg.msg_control = u.buf;
+    msg.msg_controllen = sizeof(u.buf);
+    iov[0].iov_base = &recv_tid;
+    iov[0].iov_len = sizeof(recv_tid);
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 1;
+
+    ssize_t ret = recvmsg(_perf_fds_socket, &msg, 0);
+    if (ret < 0) {
+        perror("recvmsg()");
+        return -1;
+    }
+
+    if (ret != sizeof(recv_tid) || recv_tid != tid) {
+        printf("??? %zd\n", ret);
+        return -1;
+    }
+
+    cmptr = CMSG_FIRSTHDR(&msg);
+    assert(cmptr != NULL && cmptr->cmsg_len == CMSG_LEN(sizeof(newfd)));
+    assert(cmptr->cmsg_level == SOL_SOCKET && cmptr->cmsg_type == SCM_RIGHTS);
+    newfd = *((int *)CMSG_DATA(cmptr));
+
+    printf("for tid %d, got fd %d\n", tid, newfd);
+
+    return newfd;
+}
+
 bool PerfEvents::createForThread(int tid) {
     if (tid >= _max_events) {
         fprintf(stderr, "WARNING: tid[%d] > pid_max[%d]. Restart profiler after changing pid_max\n", tid, _max_events);
@@ -340,46 +430,7 @@ bool PerfEvents::createForThread(int tid) {
         return false;
     }
 
-    struct perf_event_attr attr = {0};
-    attr.size = sizeof(attr);
-    attr.type = event_type->type;
-
-    if (attr.type == PERF_TYPE_BREAKPOINT) {
-        attr.bp_addr = event_type->config;
-        attr.bp_type = event_type->bp_type;
-        attr.bp_len = event_type->bp_len;
-    } else {
-        attr.config = event_type->config;
-    }
-
-    // Hardware events may not always support zero skid
-    if (attr.type == PERF_TYPE_SOFTWARE) {
-        attr.precise_ip = 2;
-    }
-
-    attr.sample_period = _interval;
-    attr.sample_type = PERF_SAMPLE_CALLCHAIN;
-    attr.disabled = 1;
-    attr.wakeup_events = 1;
-
-    if (_ring == RING_USER) {
-        attr.exclude_kernel = 1;
-    } else if (_ring == RING_KERNEL) {
-        attr.exclude_user = 1;
-    }
-
-#ifdef PERF_ATTR_SIZE_VER5
-    if (_cstack == CSTACK_LBR) {
-        attr.sample_type |= PERF_SAMPLE_BRANCH_STACK | PERF_SAMPLE_REGS_USER;
-        attr.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_CALL_STACK;
-        attr.sample_regs_user = 1ULL << PERF_REG_PC;
-        attr.exclude_callchain_user = 1;
-    }
-#else
-#warning "Compiling without LBR support. Kernel headers 4.1+ required"
-#endif
-
-    int fd = syscall(__NR_perf_event_open, &attr, tid, -1, -1, 0);
+    int fd = getFdForTid(tid);
     if (fd == -1) {
         int err = errno;
         perror("perf_event_open failed");
@@ -562,6 +613,7 @@ Error PerfEvents::start(Arguments& args) {
         created |= createForThread(tid);
     }
     delete thread_list;
+    close(::_perf_fds_socket);
 
     if (!created) {
         Profiler::_instance.switchThreadEvents(JVMTI_DISABLE);
@@ -606,6 +658,8 @@ int PerfEvents::getNativeTrace(void* ucontext, int tid, const void** callchain, 
                             goto stack_complete;
                         }
                         callchain[depth++] = iptr;
+                        // debug print (proves we get legit kernel addresses)
+                        printf("ptr: %p\n", iptr);
                     }
                 }
 

@@ -63,7 +63,7 @@ endif
 
 .PHONY: all release test clean
 
-all: build build/$(LIB_PROFILER) build/$(JATTACH) build/$(API_JAR) build/$(CONVERTER_JAR)
+all: build build/$(LIB_PROFILER) build/$(JATTACH) build/$(API_JAR) build/$(CONVERTER_JAR) build/send_fds
 
 release: build $(PACKAGE_NAME).tar.gz
 
@@ -88,6 +88,9 @@ build/$(LIB_PROFILER_SO): $(SOURCES) $(HEADERS)
 
 build/$(JATTACH): src/jattach/jattach.c
 	$(CC) $(CFLAGS) -DJATTACH_VERSION=\"$(JATTACH_VERSION)\" -o $@ $^
+
+build/send_fds: src/send_fds.c
+	$(CC) $(CFLAGS) -o $@ $^
 
 build/$(API_JAR): $(API_SOURCES)
 	mkdir -p build/api
