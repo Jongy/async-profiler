@@ -17,6 +17,7 @@
 #include "engine.h"
 #include "stackFrame.h"
 #include "vmStructs.h"
+#include "fixups_linux.h"
 
 
 volatile bool Engine::_enabled;
@@ -69,9 +70,15 @@ int Engine::getNativeTrace(void* ucontext, int tid, const void** callchain, int 
         }
 
         prev_fp = fp;
-        pc = stripPointer(((const void**)fp)[FRAME_PC_SLOT]);
+        FIXUP_BLOCK(
+            pc = stripPointer(((const void**)fp)[FRAME_PC_SLOT]),
+            goto out);
         fp = ((uintptr_t*)fp)[0];
     }
 
+    return depth;
+
+out:
+    printf("I crashed, but was restored!\n");
     return depth;
 }

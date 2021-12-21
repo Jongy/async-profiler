@@ -33,6 +33,7 @@
 #include "flameGraph.h"
 #include "flightRecorder.h"
 #include "fdtransferClient.h"
+#include "fixups_linux.h"
 #include "frameName.h"
 #include "os.h"
 #include "stackFrame.h"
@@ -959,6 +960,8 @@ Error Profiler::start(Arguments& args, bool reset) {
     if (error) {
         return error;
     }
+
+    Fixups::init();
 
     _event_mask = (args._event != NULL ? EM_CPU : 0) |
                   (args._alloc > 0 ? EM_ALLOC : 0) |
