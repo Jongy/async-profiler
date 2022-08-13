@@ -65,20 +65,27 @@ static inline bool socketPathForPid(int pid, int nspid, struct sockaddr_un *sun,
         char nspid_path[64];
         snprintf(nspid_path, sizeof(nspid_path), "/proc/%d/ns/pid", pid);
 
+        printf("have ns pid\n");
+
         char link[32];
         const ssize_t link_size = readlink(nspid_path, link, sizeof(link));
         if (link_size < 0 || link_size == sizeof(link)) {
             return false;
         }
 
+        printf("got link: %s\n", link);
+
         if (sscanf(link, "pid:[%u]", &ns_inode) != 1) {
             return false;
         }
+
+        printf("got inode: %u\n", ns_inode);
     }
 
     sun->sun_path[0] = '\0';
     const int max_size = sizeof(sun->sun_path) - 1;
     const int path_len = snprintf(sun->sun_path + 1, max_size, "async-profiler-%u-%d", ns_inode, nspid);
+    printf("socket: %s\n", sun->sun_path + 1);
     if (path_len > max_size) {
         return false;
     }
