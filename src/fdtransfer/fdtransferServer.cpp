@@ -279,8 +279,8 @@ static int single_pid_server(int pid) {
 
     struct sockaddr_un sun;
     socklen_t addrlen;
-    if (!socketPathForPid(nspid, &sun, &addrlen)) {
-        fprintf(stderr, "Path too long\n");
+    if (!socketPathForPid(pid, nspid, &sun, &addrlen)) {
+        fprintf(stderr, "Failed to generate socket path for PID %d NSPID %d\n", pid, nspid);
         return 1;
     }
 

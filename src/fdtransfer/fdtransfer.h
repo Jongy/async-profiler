@@ -57,10 +57,28 @@ struct perf_fd_response {
 };
 
 
-static inline bool socketPathForPid(int pid, struct sockaddr_un *sun, socklen_t *addrlen) {
+static inline bool socketPathForPid(int pid, int nspid, struct sockaddr_un *sun, socklen_t *addrlen) {
+    unsigned int ns_inode = 0;
+
+    if (access("/proc/self/ns/pid", F_OK) == 0) {
+        // system has PID NS, socket path should include the PID NS inode.
+        char nspid_path[64];
+        snprintf(nspid_path, sizeof(nspid_path), "/proc/%d/ns/pid", pid);
+
+        char link[32];
+        const ssize_t link_size = readlink(nspid_path, link, sizeof(link));
+        if (link_size < 0 || link_size == sizeof(link)) {
+            return false;
+        }
+
+        if (sscanf(link, "pid:[%u]", &ns_inode) != 1) {
+            return false;
+        }
+    }
+
     sun->sun_path[0] = '\0';
     const int max_size = sizeof(sun->sun_path) - 1;
-    const int path_len = snprintf(sun->sun_path + 1, max_size, "async-profiler-%d", pid);
+    const int path_len = snprintf(sun->sun_path + 1, max_size, "async-profiler-%u-%d", ns_inode, nspid);
     if (path_len > max_size) {
         return false;
     }
